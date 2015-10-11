@@ -15,18 +15,51 @@
 #include <linux/proc_fs.h>
 #include <linux/slab.h>
 #include <linux/gpio.h>
-#include <linux/hrtimer.h>
-#include <linux/ktime.h>
+#include <linux/io.h>
 
 #include <asm/system.h>
 #include <asm/irq.h>
 #include <asm/current.h>
 
-
 #define PROC_FILE_NAME "sensor"
 
-static int gpioNum = 16;
+#define HIGH 1
+#define LOW 0
+#define MS(t) (u16)(t * 1000L)
+#define US(t) (u16)(t)
+
+
+// Registers to configure Timer 2
+#define TIMER2_COUNT		0x42
+#define TIMER_CTL			0x43
+#define NMI_STATUS		0x61
+
+#define TIMER2_LATCH_CMD	0x80
+#define TIMER2_INIT_COUNT	0xFFFF
+#define TIMER2_INIT_CMD	0xB8
+/*
+SC1:	1		// Timer 2
+SC0:	0
+RW1:	1		// 16-Bit mode
+RW0:	1
+M2:		1		// Mode 4
+M1:		0
+M0:		0
+BCD:	0		// Binary
+*/
+
+// Timer 2 clock params
+#define TIMER2_HZ			(1193000L)
+
+#define TICKS_10US		12L
+#define TICKS_100US		120L
+#define TICKS_1MS			1193L
+#define TICKS_18MS		21474L
+	
+
+static int gpioNum = 11;
 module_param(gpioNum, int, S_IRUGO);
+
 
 struct sampleData {
 	int tempInt;
@@ -37,78 +70,111 @@ struct sampleData {
 
 	// 0 on success
 	int error;
+	
+	// Should be close to 50
+	u16 ackTime;
 };
 
+static inline void resetCounter() {
 
-// Record how long it takes (in ns) before the GPIO = the given value
-// Return -1 on timeout
-static s64 waitGPIO(int value, u64 timeout) {
-
-	u64 startTime = ktime_to_ns(ktime_get());
-
-	while(gpio_get_value(gpioNum) != value) {
-		
-		u64 curr = ktime_to_ns(ktime_get());
-		u64 diff = curr - startTime;
-		if(diff >= timeout)
-			return -1;
-	}
-
-	return ktime_to_ns(ktime_get()) - startTime;
+	// Write counter init command
+	outb(TIMER2_INIT_CMD, TIMER_CTL);
+	
+	// Write 16-bit initial count
+	outb(TIMER2_INIT_COUNT, TIMER2_COUNT);
+	outb((TIMER2_INIT_COUNT >> 8), TIMER2_COUNT);
 }
 
+static void initCounter() {
+	// Enable Timer 2 gate
+	u8 nmi = inb(NMI_STATUS);
+	nmi |= 0x01;
+	outb(nmi, NMI_STATUS);
+	
+	resetCounter();
+}
 
-#define HIGH 1
-#define LOW 0
-#define MS(t) (u64)(t * 1000000L)
-#define US(t) (u64)(t * 1000L)
+// Read current counter value
+static inline u32 readCounter() {
+	// Write counter latch command
+	outb(TIMER2_LATCH_CMD, TIMER_CTL);
+	
+	// Read in current value
+	u8 lsb = inb(TIMER2_COUNT);
+	u8 msb = inb(TIMER2_COUNT);
+	u16 count = (msb << 8) | lsb;
+
+	// Return current value
+	return count;
+}
+
+// Record how long it takes (in usec) before the GPIO = the given value
+// Return -1 on timeout
+static inline s16 waitGPIO(int value, u16 timeout) {
+	u16 timeoutTicks = (timeout * TICKS_1MS) / 1000L;
+	resetCounter();
+	u16 curr, diff;
+	while(gpio_get_value(gpioNum) != value) {
+		curr = readCounter();
+		diff = TIMER2_INIT_COUNT - curr;
+		if(diff > timeoutTicks) {
+			return -1;
+		}
+	}
+
+	return (diff * 1000L) / TICKS_1MS;
+}
+
+static inline void waitTicks(u16 ticks) {
+	while(1) {
+		u16 curr = readCounter();
+		u16 diff = TIMER2_INIT_COUNT - curr;
+		if(diff >= ticks) {
+			break;
+		}
+	}
+}
+
 #define WAIT(value, timeout, errcode) if(waitGPIO(value, timeout) < 0) { result.error = errcode; goto err; }
+
 
 static struct sampleData readSensor() {
 	struct sampleData result;
 	
-
 	unsigned long flags;
 	
-	// Grab the current time
-	u64 startTime = ktime_to_ns(ktime_get());
+	result.error = 0;
+	
+	local_irq_save(flags);
+	
+	// Start the counter
+	resetCounter();
 
 	// Dip the GPIO low
 	gpio_direction_output(gpioNum, LOW);
 
 	// Hold it low for 18ms
+	waitTicks(TICKS_18MS);
 	
-	int i;
-	while(1) {
-		u64 curr = ktime_to_ns(ktime_get());
-		u64 diff = curr - startTime;
-		if(diff >= MS(18)) {
-	//		printk(KERN_INFO "Diff: %llu / %llu", diff, MS(18));
-			break;
-		}
-	}
-
 	// Release the GPIO
 	gpio_direction_input(gpioNum);
 
 	// Wait for the ACK 'dip' - should be 80us
-	WAIT(LOW, US(100), 1);
-	WAIT(HIGH, US(100), 2);
-//	s64 dipLen = waitGPIO(HIGH, US(100));
-//	if(dipLen < 0) { result.error = 2; goto err; }
-
-
+	waitGPIO(LOW, 100);
+	result.ackTime = waitGPIO(HIGH, 100);
 
 	// The low before the first data bit (low for 50us)
-	WAIT(LOW, US(100), 3);
-
+	waitGPIO(LOW, 100);
+	
+	
 	// Now read 40 bits
 	u64 bits = 0;
+	int i;
 	for(i=0;;i++) {
 		// Input currently low
 
 		// Wait for the dip to end - doesn't matter how long
-		WAIT(HIGH, US(100), 4)
+		WAIT(HIGH, 100, 4)
 
 		if(i == 40) {
 			// That was the 'stop dip'
@@ -118,12 +184,12 @@ static struct sampleData readSensor() {
 
 
 		// High for variable length
-		int len = waitGPIO(LOW, US(100));
+		u16 len = waitGPIO(LOW, 100);
 		if(len < 0) { result.error = 5; goto err; }
 
 		// Longer than 50us means high bit
 		bits = (bits << 1);
-		if(len > US(50))
+		if(len > 40)
 			bits = bits | 1;
 
 	}
@@ -147,6 +213,12 @@ static struct sampleData readSensor() {
 	// And we're good!
 
 err:
+	
+	// Wait 18 more msec
+	waitTicks(TICKS_18MS);
+
+	local_irq_restore(flags);
+	
 	return result;
 }
 
@@ -157,6 +229,8 @@ static int sample_show(struct seq_file *s, void *p) {
 	seq_printf(s, "T\t%d.%d\n", data->tempInt, data->tempFrac);
 	seq_printf(s, "H\t%d.%d\n", data->humidityInt, data->humidityFrac);
 	seq_printf(s, "E\t%d\n", data->error);
+	seq_printf(s, "A\t%d\n", data->ackTime);
+
 
 	kfree(s->private);
 	return 0;
@@ -167,11 +241,6 @@ static int sensor_open(struct inode *inode, struct file *file) {
 
 	*data = readSensor();
 
-/*	if(data->error != 0) {
-		kfree(data);
-		return data->error;
-	}
-*/
 	return single_open(file, sample_show, data);
 }
 
@@ -197,12 +266,17 @@ static int sensor_init(void) {
 	}
 
 
-	// Set GPIO to input
-//	gpio_direction_input(gpioNum);
+	
+	initCounter();
+	
+	printk(KERN_INFO "Counter before: %d", readCounter());
+	printk(KERN_INFO "Counter before: %d", readCounter());
+
 	
 	// Set output value to 0
 	gpio_set_value(gpioNum, 0);
 
+	// Set GPIO to input
 	gpio_direction_input(gpioNum);
 	
 
@@ -217,6 +291,7 @@ static int sensor_init(void) {
 }
 
 static void sensor_exit(void) {
+	printk(KERN_INFO "Counter after: %d", readCounter());
 	printk(KERN_ALERT "Sensor Module Exited\n");
 
 	gpio_free(gpioNum);
@@ -228,5 +303,5 @@ static void sensor_exit(void) {
 module_init(sensor_init);
 module_exit(sensor_exit);
 
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("LGPL");
 MODULE_AUTHOR("Lee Marshall");
