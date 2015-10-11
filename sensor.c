@@ -1,6 +1,6 @@
 /**
 
-	Quick and dirty temp+humidity interface module for Bifferboard.
+	Quick and dirty DHT11 temp+humidity sensor interface module for Bifferboard.
 	Do NOT enable kernel preemption.
 
 	Creates /proc/sensor . Open this and read it for current values.
@@ -240,7 +240,7 @@ static int sensor_open(struct inode *inode, struct file *file) {
 	struct sampleData *data = kmalloc(sizeof(struct sampleData), GFP_KERNEL);
 
 	*data = readSensor();
-
+	
 	return single_open(file, sample_show, data);
 }
 
@@ -264,7 +264,6 @@ static int sensor_init(void) {
 		printk(KERN_ALERT "Unable to request GPIO");
 		return ret;
 	}
-
 
 	
 	initCounter();
@@ -294,9 +293,9 @@ static void sensor_exit(void) {
 	printk(KERN_INFO "Counter after: %d", readCounter());
 	printk(KERN_ALERT "Sensor Module Exited\n");
 
-	gpio_free(gpioNum);
-
 	remove_proc_entry(PROC_FILE_NAME, NULL);
+	
+	gpio_free(gpioNum);
 }
 
 
