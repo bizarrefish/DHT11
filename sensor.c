@@ -55,7 +55,7 @@ BCD:	0		// Binary
 #define TICKS_100US		120L
 #define TICKS_1MS			1193L
 #define TICKS_18MS		21474L
-	
+
 
 static int gpioNum = 11;
 module_param(gpioNum, int, S_IRUGO);
@@ -70,7 +70,7 @@ struct sampleData {
 
 	// 0 on success
 	int error;
-	
+
 	// Should be close to 50
 	u16 ackTime;
 };
@@ -79,7 +79,7 @@ static inline void resetCounter() {
 
 	// Write counter init command
 	outb(TIMER2_INIT_CMD, TIMER_CTL);
-	
+
 	// Write 16-bit initial count
 	outb(TIMER2_INIT_COUNT, TIMER2_COUNT);
 	outb((TIMER2_INIT_COUNT >> 8), TIMER2_COUNT);
@@ -90,7 +90,7 @@ static void initCounter() {
 	u8 nmi = inb(NMI_STATUS);
 	nmi |= 0x01;
 	outb(nmi, NMI_STATUS);
-	
+
 	resetCounter();
 }
 
@@ -98,7 +98,7 @@ static void initCounter() {
 static inline u32 readCounter() {
 	// Write counter latch command
 	outb(TIMER2_LATCH_CMD, TIMER_CTL);
-	
+
 	// Read in current value
 	u8 lsb = inb(TIMER2_COUNT);
 	u8 msb = inb(TIMER2_COUNT);
@@ -140,13 +140,13 @@ static inline void waitTicks(u16 ticks) {
 
 static struct sampleData readSensor() {
 	struct sampleData result;
-	
+
 	unsigned long flags;
-	
+
 	result.error = 0;
-	
+
 	local_irq_save(flags);
-	
+
 	// Start the counter
 	resetCounter();
 
@@ -155,7 +155,7 @@ static struct sampleData readSensor() {
 
 	// Hold it low for 18ms
 	waitTicks(TICKS_18MS);
-	
+
 	// Release the GPIO
 	gpio_direction_input(gpioNum);
 
@@ -165,8 +165,8 @@ static struct sampleData readSensor() {
 
 	// The low before the first data bit (low for 50us)
 	waitGPIO(LOW, 100);
-	
-	
+
+
 	// Now read 40 bits
 	u64 bits = 0;
 	int i;
@@ -200,7 +200,7 @@ static struct sampleData readSensor() {
 	result.humidityFrac = (bits >> 24) & 0xFF;
 	result.tempInt = (bits >> 16) & 0xFF;
 	result.tempFrac = (bits >> 8) & 0xFF;
-	
+
 	// Do the checksum
 	u64 checksum = bits & 0xFF;
 	u64 total = (u64)result.humidityInt + (u64)result.humidityFrac + (u64)result.tempInt + (u64)result.tempFrac;
@@ -213,12 +213,12 @@ static struct sampleData readSensor() {
 	// And we're good!
 
 err:
-	
+
 	// Wait 18 more msec
 	waitTicks(TICKS_18MS);
 
 	local_irq_restore(flags);
-	
+
 	return result;
 }
 
@@ -240,7 +240,7 @@ static int sensor_open(struct inode *inode, struct file *file) {
 	struct sampleData *data = kmalloc(sizeof(struct sampleData), GFP_KERNEL);
 
 	*data = readSensor();
-	
+
 	return single_open(file, sample_show, data);
 }
 
@@ -265,19 +265,19 @@ static int sensor_init(void) {
 		return ret;
 	}
 
-	
+
 	initCounter();
-	
+
 	printk(KERN_INFO "Counter before: %d", readCounter());
 	printk(KERN_INFO "Counter before: %d", readCounter());
 
-	
+
 	// Set output value to 0
 	gpio_set_value(gpioNum, 0);
 
 	// Set GPIO to input
 	gpio_direction_input(gpioNum);
-	
+
 
 	struct proc_dir_entry *entry;
 	entry = create_proc_entry(PROC_FILE_NAME, 0, NULL);
@@ -294,7 +294,7 @@ static void sensor_exit(void) {
 	printk(KERN_ALERT "Sensor Module Exited\n");
 
 	remove_proc_entry(PROC_FILE_NAME, NULL);
-	
+
 	gpio_free(gpioNum);
 }
 
