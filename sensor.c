@@ -135,8 +135,6 @@ static inline void waitTicks(u16 ticks) {
 	}
 }
 
-#define WAIT(value, timeout, errcode) if(waitGPIO(value, timeout) < 0) { result.error = errcode; goto err; }
-
 
 static struct sampleData readSensor() {
 	struct sampleData result;
@@ -173,9 +171,13 @@ static struct sampleData readSensor() {
 	for(i=0;;i++) {
 		// Input currently low
 
-		// Wait for the dip to end - doesn't matter how long
-		WAIT(HIGH, 100, 4)
-
+		// Wait for the dip to end
+		if(waitGPIO(HIGH, 100) < 0) {
+			result.error = 2;
+			goto err;
+			
+		}
+		
 		if(i == 40) {
 			// That was the 'stop dip'
 			// We're done receiving
@@ -268,12 +270,8 @@ static int sensor_init(void) {
 
 	initCounter();
 
-	printk(KERN_INFO "Counter before: %d", readCounter());
-	printk(KERN_INFO "Counter before: %d", readCounter());
-
-
 	// Set output value to 0
-	gpio_set_value(gpioNum, 0);
+	gpio_set_value(gpioNum, LOW);
 
 	// Set GPIO to input
 	gpio_direction_input(gpioNum);
@@ -290,7 +288,6 @@ static int sensor_init(void) {
 }
 
 static void sensor_exit(void) {
-	printk(KERN_INFO "Counter after: %d", readCounter());
 	printk(KERN_ALERT "Sensor Module Exited\n");
 
 	remove_proc_entry(PROC_FILE_NAME, NULL);
