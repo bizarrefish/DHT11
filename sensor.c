@@ -25,35 +25,32 @@
 
 #define HIGH 1
 #define LOW 0
-#define MS(t) (u16)(t * 1000L)
-#define US(t) (u16)(t)
 
 
 // Registers to configure Timer 2
 #define TIMER2_COUNT		0x42
-#define TIMER_CTL			0x43
+#define TIMER_CTL		0x43
 #define NMI_STATUS		0x61
 
 #define TIMER2_LATCH_CMD	0x80
 #define TIMER2_INIT_COUNT	0xFFFF
-#define TIMER2_INIT_CMD	0xB8
+
+#define TIMER2_INIT_CMD		0xB8
 /*
 SC1:	1		// Timer 2
 SC0:	0
 RW1:	1		// 16-Bit mode
 RW0:	1
-M2:		1		// Mode 4
-M1:		0
-M0:		0
+M2:	1		// Mode 4
+M1:	0
+M0:	0
 BCD:	0		// Binary
 */
 
-// Timer 2 clock params
-#define TIMER2_HZ			(1193000L)
-
+// Ticks values for different amounts of time
 #define TICKS_10US		12L
 #define TICKS_100US		120L
-#define TICKS_1MS			1193L
+#define TICKS_1MS		1193L
 #define TICKS_18MS		21474L
 
 
